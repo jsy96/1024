@@ -1,0 +1,25 @@
+async function renderManage(){
+ const [p,i]=await Promise.all([API.call('/people'),API.call('/items')]);
+ $('main').innerHTML=`<div class="pagehead"><h1>公司人员与服务项目</h1><button id="new-worker" class="btn">新增服务员</button></div><div class="card"><h3>服务员</h3>${peopleTable(p.people)}</div><section class="card"><h3>服务项目 <button class="btn btn-small" id="new-item">新增项目</button></h3><p class="muted small">项目只归属本公司。订单会固定保存预约时的价格与酬金，修改项目不会改写旧订单。</p>${table(['服务项目','默认时长','服务币／小时','默认时长酬金单位','状态','操作'],i.items.map(x=>[esc(x.name),x.minutes+'分钟',money(x.unit_price_cents),money(x.worker_pay_cents),x.active?'可预约':'已下架',`<button class="btn btn-small btn-plain" data-edit-item="${x.id}">编辑</button>`]))}</section>`;
+ $('new-worker').onclick=()=>personModal();wirePeople(p.people);$('new-item').onclick=()=>itemModal();document.querySelectorAll('[data-edit-item]').forEach(b=>b.onclick=()=>itemModal(i.items.find(x=>x.id===Number(b.dataset.editItem))));
+}
+function peopleTable(rows){return table(['姓名／账号','地址','状态',ME.role==='community'?'补贴资格／服务币余额':'位置','操作'],rows.map(x=>[`${esc(x.name)}<br>${esc(x.phone)}`,esc(x.address),x.active?'启用':'停用',ME.role==='community'?`${x.subsidy_eligible?'符合':'不符合'} / ${money(x.balance_cents)}`:`${esc(x.lat??'—')}, ${esc(x.lng??'—')}`,`<button class="btn btn-small btn-plain" data-person="${x.id}">编辑档案</button>`]));}
+function wirePeople(rows){document.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>personModal(rows.find(x=>x.id===Number(b.dataset.person))));}
+function personModal(p={}){
+ modal((p.id?'编辑':'新增')+(ME.role==='community'?'老人档案':'服务员'),`<form id="person-form">${field('姓名','name','text',p.name||'','required')}${p.id?`<p>账号：${esc(p.phone)}</p><input type="hidden" name="id" value="${p.id}">`:field('手机号／账号','phone','tel','','required')+field('初始密码','password','password','','required minlength="6"')}${field('服务／驻地地址','address','text',p.address||'')}<div class="frow"><div>${field('地图纬度（可选）','lat','number',p.lat??'','step="any" min="-90" max="90"')}</div><div>${field('地图经度（可选）','lng','number',p.lng??'','step="any" min="-180" max="180"')}</div></div><label class="fl">账号状态</label><select name="active"><option value="1">启用</option><option value="0" ${p.active===0?'selected':''}>停用（保留记录）</option></select>${ME.role==='community'?`<label class="fl">社区核定高龄补贴资格</label><select name="subsidy_eligible"><option value="0">不符合／待核定</option><option value="1" ${p.subsidy_eligible?'selected':''}>符合</option></select>`:''}${p.id?field('重置密码（不改则留空）','reset_password','password','','minlength="6"'):''}<p><button class="btn" type="submit">保存档案</button></p></form>`);
+ bindForm('person-form',d=>action('/people',d));
+}
+function itemModal(i={}){
+ modal(i.id?'编辑服务项目':'新增服务项目',`<form id="item-form">${i.id?`<input name="id" type="hidden" value="${i.id}">`:''}${field('项目名称','name','text',i.name||'','required')}${field('默认时长（分钟）','minutes','number',i.minutes||60,'required min="15" max="480"')}${field('每小时服务币','unit','number',i.id?money(i.unit_price_cents):'60.00','required min="0.01" step="0.01"')}${field('默认时长的员工酬金核算单位','pay','number',i.id?money(i.worker_pay_cents):'40.00','required min="0" step="0.01"')}<label class="fl">状态</label><select name="active"><option value="1">可预约</option><option value="0" ${i.active===0?'selected':''}>下架</option></select><p><button class="btn" type="submit">保存项目</button></p></form>`);
+ bindForm('item-form',d=>action('/items',{...d,unit_price_cents:Math.round(Number(d.unit)*100),worker_pay_cents:Math.round(Number(d.pay)*100)}));
+}
+async function renderSettlement(){
+ const community=ME.role==='community';const list=await API.call(community?'/companies':'/people');const candidates=community?list.companies:list.people;const batches=await API.call('/batches');
+ $('main').innerHTML=`<div class="pagehead"><h1>${community?'社区与养老公司结算':'养老公司与员工酬金核算'}</h1></div><p class="notice">以完成凭证对应的服务币流水为依据，按记账日期汇总。退款生成负数调整，可进入后续结算。每条流水只可计入同一层级一次；生成的是结算依据，实际兑付由合同及线下确认。</p><form id="settle-form" class="card"><label class="fl">${community?'养老公司':'服务员'}</label><select name="${community?'company_id':'worker_id'}" required>${options(candidates)}</select><div class="frow"><div>${field('记账开始日期','from_date','date',today().slice(0,7)+'-01','required')}</div><div>${field('记账结束日期','to_date','date',today(),'required')}</div></div><p><button class="btn" type="submit">预览待结算明细</button></p></form><div id="settle-preview"></div><h2>已有结算依据</h2>${batchCards(batches.batches)}`;
+ wireBatches();
+ bindForm('settle-form',async params=>{
+  const p=await API.call('/batches/preview',{method:'POST',body:params});
+  $('settle-preview').innerHTML=`<section class="card"><h3>本批合计：${money(p.total_cents)} ${community?'服务币':'酬金核算单位'} · ${p.entries.length}条</h3>${entryTable(p.entries,p.kind)}${p.entries.length?`<form id="create-batch-form">${field('结算依据单号（唯一）','reference','text','','required maxlength="100"')}<p><button class="btn btn-green" type="submit">确认生成结算依据</button></p></form>`:empty('无待结算流水，或已计入其他批次')}</section>`;
+  wireOrders();if($('create-batch-form'))bindForm('create-batch-form',d=>action('/batches',{...params,...d,entry_ids:p.entries.map(e=>e.id)}));
+ });
+}

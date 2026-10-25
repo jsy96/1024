@@ -1,0 +1,18 @@
+function checkinModal(id){
+ modal('开始服务 · 实际地址打卡',`<div class="notice">到达老人服务地址、准备开始服务时打卡。请允许浏览器定位；地址和坐标将随服务器时间一起留存。</div><form id="checkin-form">${field('本次实际服务地址','address','text','','required minlength="4"')}<p><button class="btn btn-plain" type="button" id="locate">获取当前位置</button></p><p id="location-info" class="muted">尚未定位</p><button class="btn" type="submit" id="submit-checkin" disabled>确认开始服务</button></form>`);
+ let locationData;
+ $('locate').onclick=()=>{if(!navigator.geolocation){toast('此浏览器不支持定位');return;}$('locate').disabled=true;$('location-info').textContent='正在定位…';navigator.geolocation.getCurrentPosition(p=>{locationData={lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy};if(!$('location-info'))return;$('location-info').textContent=`WGS84 ${locationData.lat.toFixed(6)}, ${locationData.lng.toFixed(6)}，精度约 ${Math.round(locationData.accuracy)} 米`;$('submit-checkin').disabled=locationData.accuracy>1000;$('locate').disabled=false;},err=>{if(!$('location-info'))return;$('location-info').textContent='定位失败：'+err.message+'。请在浏览器与 Mac 系统设置中允许定位后重试。';$('locate').disabled=false;},{enableHighAccuracy:true,timeout:15000,maximumAge:0});};
+ bindForm('checkin-form',d=>action(`/orders/${id}/checkin`,{...d,...locationData}));
+}
+function completeModal(id){
+ modal('结束服务 · 上传与老人合影',`<form id="complete-form" enctype="multipart/form-data"><div class="notice">服务结束后，与老人合影并征得本人同意。照片仅供本订单相关方核验和对账，不能单凭图片自动判定服务真实性。</div><label class="fl" for="photo-input">服务结束合影（JPG / PNG / WebP，8MB以内）</label><input id="photo-input" name="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="user" required><img id="photo-preview" class="proof-photo" alt="待提交合影预览" hidden><p><label><input name="consent" type="checkbox" value="1" required> 已征得老人同意，确认为本次服务结束合影</label></p>${field('服务备注','note')}<p>提交后记录服务器完成时间，按订单快照扣除服务币，并生成两层结算依据。</p><button class="btn btn-green" type="submit">确认完成并记账</button></form>`);
+ $('photo-input').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>8*1024*1024){toast('照片超过8MB');e.target.value='';$('photo-preview').hidden=true;return;}const url=URL.createObjectURL(f);modalUrls.push(url);$('photo-preview').src=url;$('photo-preview').hidden=false;};
+ bindForm('complete-form',(_,form)=>action(`/orders/${id}/complete`,new FormData(form)));
+}
+async function renderRoute(){
+ $('main').innerHTML=`<h1>上门服务行程</h1><form id="route-form" class="card row"><input id="route-date" type="date" value="${today()}" required style="width:auto"><button class="btn" type="submit">查看当日安排</button></form><div class="notice">根据预约时间和位置估算行程，含路途缓冲、午餐及电量提醒。地图和天气需联网；不配置高德 Key 时使用距离估算。</div><div id="route-result"></div>`;
+ const load=async()=>{const d=await API.call('/route?date='+$('route-date').value);$('route-result').innerHTML=`<div class="card"><h3>${esc(d.date)} · ${d.total_km||0} km</h3><p>${esc(d.weather_note||'')}</p>${(d.warnings||[]).map(w=>`<p class="notice">${esc(w)}</p>`).join('')}${d.battery?`<p>${esc(d.battery.note)}</p>`:''}</div>${(d.check?.orders||d.stops||[]).map(s=>`<article class="card"><h3>${s.seq}. ${esc(s.customer)} · ${esc(s.item)}</h3><p>${esc(s.start||s.sched)} — ${esc(s.end||s.depart)}<br>${s.travel_min?`预计路途 ${s.travel_min} 分钟；预留间隔 ${s.gap_min} 分钟`:''}</p></article>`).join('')}${d.markers?.length?'<div id="route-map" class="map"></div>':empty('当天无待服务订单')}`;
+ if(d.markers?.length){const m=Maps.create('route-map'),points=[];d.markers.forEach(p=>{points.push([p.lat,p.lng]);L.marker([p.lat,p.lng],{icon:Maps.pin(p.seq,p.home?'home':'')}).addTo(m).bindPopup(esc(p.customer));});L.polyline(points,{dashArray:'6 6'}).addTo(m);m.fitBounds(points,{padding:[30,30],maxZoom:14});}
+ };
+ bindForm('route-form',load);await load();
+}

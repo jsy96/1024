@@ -1,0 +1,12 @@
+data/
+.venv-mac/
+.venv-win/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.pid
+.DS_Store
+secrets.json
